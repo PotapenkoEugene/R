@@ -1,0 +1,188 @@
+---
+title: "Project_1"
+author: "Anonymous"
+date: "11/9/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##  Подготовка к работе
+
+Устанавливаем необходимые пакеты:
+```{r, eval = F}
+
+```
+
+
+Подгружаем установленные пакеты в текущую сессию R:
+```{r, echo = T, eval = T, include = T, message = F}
+library(ggplot2)
+library(data.table)
+library(dplyr)
+
+```
+
+Задаем путь к рабочей директории:
+```{r, echo = T, eval = T, include = T}
+path <- setwd("/home/gene/Orthonectida/Bioinf/1_semestr/Stat_R/R/data/mollusс_project/")
+```
+## **#1** Объединение файлов в одну таблицу
+
+Данная функция объединяет все файлы с форматом .csv в одну таблицу
+```{r, echo = T,eval = T,include = T}
+merge_files_data <- function(path){
+  file_list <- list.files(path, pattern = '*.csv')
+  data <- data.frame()
+  for(file in file_list){
+    file = paste0(path,"/", file)
+  data <- rbind(data, read.table(file, header = TRUE, stringsAsFactors = FALSE, dec = '.', sep=',' ))
+  }
+  return(data)
+}
+```
+
+Запускаем данную функцию, с ранее созданной переменной **path**, сохраняя полученную таблицу в переменную **data**.
+```{r, echo = T, eval = T, include = T}
+data <- merge_files_data(path)
+```
+
+
+## **#2** Анализ собранных данных
+
+Проверяем структуру полученной таблицы
+```{r, echo = T, eval = T, include = T}
+str(data)
+```
+
+Меняем длинное имя 2ой переменной на более короткое, с которым будет удобно работать дальше.
+```{r, echo = T, eval = T , include = T}
+setnames(data, "Sex..1...male..2...female..3...uvenil.", "Sex")
+```
+Первые 3 переменные несмотря на свои числовые значения определились как **character**, а не **numeric**. Ищем некорректные значения при помощи функции **unique** показывающие только неповторяющиеся значения перменной.
+```{r, echo = T, eval = T, include = T}
+unique(data$Rings)
+unique(data$Sex)
+unique(data$Length)
+```
+
+Меняем некорректно заполненные значения на числовые, спасаем все, что можно спасти.
+```{r, echo = T, eval = T, include = T}
+data$Rings[data$Rings == 'nine'] <- 9 
+
+data$Sex[data$Sex == 'one'] <- 1
+data$Sex[data$Sex == 'male'] <- 1
+data$Sex[data$Sex == 'three'] <- 3
+```
+
+Превращаем все наши переменные в **numeric** и проверяем все переменные на присутствие **NA**.
+```{r, echo = T, eval = T, include = T, warning=FALSE}
+data[1:3] <- apply(data[1:3],2, as.numeric)
+apply(data, 2, function(x) any(is.na(x)))
+```
+
+Пропущенные значения встречающиеся в факторных переменных можно либо удалить либо заменить на моду. Первый вариант предпочтительней, поэтому удаляем строчку где **NA** присутствует в переменной **Sex** и затем делаем ее факторной. В числовых переменных можно либо удалить измерения содержащие NA или заменить NA на среднее по этой переменной. Мы проделаем второй вариант. После всех преобразований проверим еще раз остались ли в переменных **NA**.
+```{r, echo = T, eval = T , include = T}
+data <- data[!is.na(data$Sex),]
+
+data$Sex <- factor(data$Sex, 
+         levels = c("1", "2", "3"),
+          labels = c("male", "female", "juvenil"))
+
+data[,-2] <- apply(data[,-2], 2, function(x){ ifelse(is.na(x),mean(x,na.rm = TRUE), x)})
+
+apply(data, 2, function(x) any(is.na(x)))
+```
+## **#3** Среднее значение и стандартное отклонение переменной Length для моллюсков разного пола
+
+Рассчитаем среднее значение и стандартное отклонение переменной Length для моллюсков разного пола и построим график.
+```{r, echo=T, eval = T,include = T,fig.align="center"}
+stat_of_len <- data %>% 
+  group_by(Sex) %>% 
+  summarise(mean = mean(Length), sd = sd(Length))
+
+ggplot(stat_of_len, aes(x = mean, y = sd , color = Sex)) + 
+  geom_point(size = 8)
+```
+
+## **#4** Процент моллюсков со значением переменной **Height** менее 0.165
+
+Процент моллюсков со значением **Height** не превышающем 0.165 в данной выборке равен **`r nrow(data[data$Height < 0.165,]) * 100 / nrow(data)`**
+
+## **#5** Значение переменной **Length**, которое выше чем у **92%** всех наблюдений
+```{r, echo = T, eval = T , include = T}
+sorted_len <- sort(data$Length) # сортируем
+result <- sorted_len[length(sorted_len)*0.92 + 1] # выводим элемент превышающий 92% всех наблюдений
+```
+
+Значение переменной **Length** выше чем у **92%** всех наблюдений равно **`r result`**
+
+## **#6** Стандартизация переменной **Length**
+```{r, echo = T, eval = T, include= T}
+Lenght_z_scores <- scale(data$Length)
+```
+
+## **#7** Сравнение между собой диаметр моллюсков с числом колец 5 и 15. 
+
+Для начала проверяем на нормальность распределения по значению **Diameter** у моллюсков с 5 и 15 кольцами.
+```{r, echo = T, eval = T, include= T, message= F,fig.align="center"}
+gr_data5 <- data %>% 
+  filter(Rings == 5) %>% 
+  select(Rings,Diameter)
+shapiro.test(gr_data5$Diameter)
+ggplot(gr_data5, aes(Diameter)) + 
+  geom_histogram()
+
+
+  
+gr_data15 <- data %>% 
+  filter(Rings == 15) %>% 
+  select(Rings,Diameter)
+shapiro.test(gr_data15$Diameter)
+ggplot(gr_data15, aes(Diameter)) + 
+  geom_histogram()
+```
+
+Шапиро-тест показал для переменной **Diameter** для моллюсков c 5 кольцами и для моллюсков с 15 кольцами, **p-value > 0.05**, поэтому принимаем нулевые гипотезы о том, что распределения нормальны.
+
+Если распределения нормальны, можем применить t-test (не только в этом случае, но тут точно прям мамой клянусь можем). Нулевая гипотеза говорит о том, что наши распределения не различаются.
+
+```{r, echo = T, eval = T, include = T}
+result <- t.test(gr_data5,gr_data15)
+```
+В данном тесте получаем значение **p-value `r result$p.value`** сильно меньше 0.05, что позволяет отклонить нулевую гипотезу, следовательно признак **Diameter** у улиток с 5 кольцами и у улиток с 15 кольцами доставерно различается.
+
+```{r, echo = T,eval = T, include = T, fig.align="center"}
+gr_data <- data %>% 
+  filter(Rings == 5 | Rings == 15) %>% 
+  select(Rings,Diameter)
+
+ggplot(gr_data, aes(as.factor(Rings), Diameter)) +
+  geom_boxplot()+
+  xlab('Rings')
+```
+
+## **#8** Взаимосвязь переменных Diametr и Whole_weight
+
+Нарисуем график зависимости переменной **Diameter** от переменной **Whole_weight**
+```{r, echo = F,eval = T, include = T,fig.align="center", message = F}
+ggplot(data, aes(Diameter, Whole_weight))+
+  geom_point(color = 'darkgreen')+
+  geom_smooth()
+```
+Судя по графику видим, что явно присутствует зависимость. Необходимо проверить на нормальность, чтобы выбрать какой коэффициент корреляции будем использовать.
+```{r, echo = T, eval = T, include = T}
+shapiro.test(data$Diameter)
+shapiro.test(data$Whole_weight)
+```
+
+Значения p-value для обоих переменных сильно меньше 0.05, что позволяет отклонить нулевую гипотезу о нормальности распределения.
+Так как распределение не нормальное используем коэффициент корреляции Спирмана.
+
+```{r, echo = T, eval = T, include = T}
+cor(data$Diameter, data$Whole_weight, method = "spearman")
+```
+Коэффициент корреляции Спирмана примерно равен 1, что говорит о сильной положительной корреляции между двумя этими признаками.
+
+Конец.
