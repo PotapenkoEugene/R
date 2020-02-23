@@ -1,13 +1,211 @@
 ---
 title: "Stat_project_3"
-author: "PotapenkoEugene"
+author: "Someone"
 date: "2/20/2020"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(zoo)
+library(lawstat)
+library(MASS)
+library(pca3d)
 ```
 
 # Abstract: Expression levels of 77 proteins measured in the cerebral cortex of 8 classes of control and Down syndrome mice exposed to context fear conditioning, a task used to assess associative learning.
 	
+```{r Loading  and check data}
+path = './data/Data_Cortex_Nuclear.csv'
+data <- read.csv(path,na.strings = '', sep='\t')
+str(data)
+```
+
+Basic description by columns
+1 Mouse ID
+2..78 Values of expression levels of 77 proteins; the names of proteins are followed by 
+indicating that they were measured in the nuclear fraction. For example: DYRK1A_n
+79 Genotype: control (c) or trisomy (t)
+80 Treatment type: memantine (m) or saline (s)
+81 Behavior: context-shock (CS) or shock-context (SC)
+82 Class: c-CS-s, c-CS-m, c-SC-s, c-SC-m, t-CS-s, t-CS-m, t-SC-s, t-SC-m
+
+  We can see that variable **class** consist of all other variables and we haven't any problem with our factor variables. 
+```{r}
+ggplot(data, aes(x = class, y = Treatment)) + 
+  geom_point(aes(color=Behavior), size = 10) + 
+  facet_grid(Genotype~.) + # visualisng our groups based on factors levels
+  ggtitle('Factors variables') +
+    theme(plot.title = element_text(hjust = 0.5, size = 20))
+ggplot(data, aes(x=class)) + 
+  geom_histogram(stat='count', na.rm = TRUE) +
+  ggtitle('Class balance') +
+    theme(plot.title = element_text(hjust = 0.5, size = 20))
+```
+
+Let's check it in our dataset:
+```{r Description of dataset}
+paste('Number of mouse in experiment:', length(unique(gsub('(.*)_.*','\\1', data$MouseID)))) # So there are 72 mouses here
+
+# lets check NA values in our protein data:
+data_noNA <- na.omit(data) 
+paste('Number of samples without any NA:', nrow(data_noNA))# we have 552 obs without any NA
+# data_group <- data %>% group_by(MouseID,Genotype,Treatment,Behavior,class) %>% summarise()
+countNA <- apply(data,2 , function(x) length(x[is.na(x)]))
+countNAdf <- data.frame(na = countNA, protein = names(countNA))
+countNAdf <- countNAdf[countNAdf$na > 3,]  # remove protein with several NA's
+ggplot(data = countNAdf,aes(x = protein, y = na)) + geom_col()
+```
+
+  But half rows of our datatset have NA values and that is a real problem! In addition, five proteins: `r rownames(countNAdf[countNAdf$na > 150,]) ` have about 20% of NA values. First of all let's remove proteins with too much NA values. And then let's try to do something with another NA values.
+  
+```{r NA}
+
+data_f <- data %>% select_if(!(colnames(.) %in% rownames(countNAdf[countNAdf$na > 150, ])))# first of all let's remove protein with > 15% NA values
+
+data_noNA <- data_f %>% group_by(class) %>% mutate_all(funs(ifelse(is.na(.),mean(.,na.rm=TRUE),.)))
+# exchange NA on mean of each class
+```
+
+We exchanged NA values on mean of each class, it's a good desicion because we removed variables with a lot of NA.
+
+Let's compare BDNF_N expression in different classes. First of all, let's look on data:
+```{r Boxplot BDNF_N}
+ggplot(data_noNA,aes(y=BDNF_N, x=class)) + geom_boxplot() 
+```
+
+We see that level of expression in different classes is approximately identical. Let's check it with power of statistic! For this tasks we want to use ANOVA, but to use it, we need the normality of the sample and the homogeneity of the variance. Let's check it:
+```{r Normality of BDNF_N expression in dif classes}
+normORnot <- group_by(data_noNA, class) %>% summarise(normORnot = shapiro.test(BDNF_N)$p.value)
+normORnot
+```
+
+The expression level of our protein is not distributed normally. Really bad, but ANOVA can handle it.  Then we need to check homogenity of variance.
+
+```{r Homogenity of variance of BDNF_N expression in dif classes}
+bdnf_vector <- data_noNA$BDNF_N
+names(bdnf_vector) <- data_noNA$class
+levene.test(bdnf_vector, c(rep('c-CS-m',150),
+                           rep('c-CS-s',135),
+                           rep('c-SC-m',150),
+                           rep('c-SC-s',135),
+                           rep('t-CS-m',135),
+                           rep('t-CS;s',105),
+                           rep('t-SC-m',135),
+                           rep('t-SC-s',135)))
+```
+
+
+So we have p-value of Levene's test << 0.05. This tells us that we haven't homogenity of variances and we can't use ANOVA =C
+*In addition we have different numbers of values in each class, it's really sad for ANOVA.
+
+Let's use non-parametric criteria. Kruskal — Wallis is non-parametric  rank criteria based on a comparison of medians of samples.
+
+```{r}
+kruskal.test(data_noNA$BDNF_N, data$class) 
+```
+
+The pvalue << 0.05 tells us that expression of BDNF_N in different classes differ significantly!
+Let's find out which groups are different. To do this, we use Tukey test (pairwise comparisons).
+
+```{r}
+turkey_test <- TukeyHSD(aov(BDNF_N~class, data=data_noNA), ordered=TRUE)
+df <- data.frame(turkey_test$class, classes = rownames(turkey_test$class))
+df_f <- df %>% filter(`p.adj` < 0.05)
+df_f[,c("classes","p.adj")]
+```
+
+Here we see which classes differ in the level of protein BDNF_N expression
+
+# Linear model for prediction of expression level of ERBB4_N protein based on values of expression of other protein.
+
+```{r}
+data_lm <- data_noNA[-c(1,77,76,75,74)]
+fit <- lm(ERBB4_N ~., data_lm)
+summary(fit)
+
+  # ggplot(fit,aes(fit$residuals))+ geom_histogram(bin = 30, color = "black", fill = "purple4") +
+# theme(panel.background = element_rect(fill = "white"),
+# axis.line.x=element_line(),
+# axis.line.y=element_line()) +
+# ggtitle("Histogram for Model Residuals")
+```
+
+Let's choose most significantly predictors!
+```{r}
+step <- stepAIC(fit, direction="both")
+step$anova # display results 
+```
+
+Let's make a diagnosis of our resulting model
+What about residues?
+```{r Residues}
+
+  gg_resid <- ggplot(data = step, aes(x = step$fitted.values, y = step$residuals)) + 
+  geom_point() + 
+  geom_hline(yintercept = 0) +
+  geom_smooth(method = "lm") +
+  geom_hline(yintercept = 2, color = "red") +
+  geom_hline(yintercept = -2, color = "red")
+gg_resid
+
+qqnorm(step$residuals)
+shapiro.test(step$residuals) # balances are not distributed normally    
+
+
+cookies <- cooks.distance(step)
+
+cookies_df <- data.frame(cookdist = cookies, samples = names(cookies))
+ggplot(cookies_df, aes(y= cookdist, x= samples)) + geom_bar(stat = "identity")
+
+
+summary(step)
+
+```
+
+We got a model with a good R square, but the residuals are not distributed normally, which indicates heteroscedasticity. The cook distance is about at the same level, which suggests that our factors do not shift the estimates of regression coefficients
+
+
+# PCA
+```{r}
+library(vegan)
+protein_pca <- rda(data_lm, scale = TRUE)
+head(summary(protein_pca))
+
+
+# Make ordination plot:
+df_scores <- data.frame(data_noNA,
+                        scores(protein_pca, display = "sites", choices = c(1, 2, 3), scaling = "sites"))
+
+p_scores <- ggplot(df_scores, aes(x = PC1, y = PC2)) + 
+  geom_point(aes( color = class), alpha = 0.5) +
+  coord_equal(xlim = c(-1.2, 1.2), ylim = c(-1.2, 1.2)) + ggtitle(label = "Ordination in the axes of the main components") + theme_bw()
+p_scores
+
+ord<-metaMDS(comm = data_lm, distance = "bray",autotransform = F)
+ord_pt <- data.frame(data_noNA[,77], scores(ord, display = "sites"))
+ggplot(ord_pt, aes(NMDS1, NMDS2, color = class))+geom_point()+ggtitle(label = "Ординация nMDS")
+# Make graphs of factor loadings
+biplot(protein_pca, scaling = "species", display = "species") # факторный нагрузки
+
+# determine what percentage each component explains
+pca_summary <- summary(protein_pca)
+pca_result <- as.data.frame(pca_summary$cont)
+plot_data <- as.data.frame(t(pca_result[c("Proportion Explained"),]))
+plot_data$component <- rownames(plot_data)
+
+ggplot(plot_data, aes( component, `Proportion Explained`)) + geom_bar(stat = "identity") + theme_bw()
+plot_data
+```
+
+Based on the load schedule, we can conclude that PC1 has negative loads for almost all proteins, while PS2 has both positive and negative loads, which are approximately evenly distributed among all proteins
+```{r}
+library(pca3d)
+gr <- factor(data_noNA$class)
+pca <-prcomp(data_lm, scale.=TRUE)
+pca3d(pca, group=gr)
+snapshotPCA3d(file="first_plot.png")
+```
